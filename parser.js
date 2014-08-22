@@ -118,8 +118,6 @@ function bmp_parser ( source ) {
     DWORDbiClrImportant : source.readUInt32LE(50),//位图显示过程中重要的颜色数(51-54字节)
   };
 
-  console.log( BITMAPFILEHEADER );
-  console.log( BITMAPINFOHEADER );
 
   var pointer = 54;
   var RGBQUADbmiColors_len =  {
@@ -145,16 +143,33 @@ function bmp_parser ( source ) {
   var pixals_counts = BITMAPINFOHEADER.LONGbiWidth * BITMAPINFOHEADER.LONGbiHeight;
   var bit_count     = BITMAPINFOHEADER.WORDbiBitCount;
   var pixals        = [];
-  for(i = 0, len = pixals_counts || 0; i < len; i++){
-    if( bit_count == 8 ){
-      pixals.push ( source.readUInt8( pixals_starts + i ) );
-    } else {
-      pixals.push({
-        'B' : source.readUInt8( pixals_starts + i * 3 ),
-        'G' : source.readUInt8( pixals_starts + i * 3 + 1 ),
-        'R' : source.readUInt8( pixals_starts + i * 3 + 2 ),
-      });
+
+  var line_bytes = Math.ceil((BITMAPINFOHEADER.LONGbiWidth*
+                              BITMAPINFOHEADER.WORDbiBitCount/8)/4)*4;
+  console.log( 'line_bytes', line_bytes);
+  console.log( 'BITMAPFILEHEADER', BITMAPFILEHEADER);
+  console.log( 'BITMAPINFOHEADER', BITMAPINFOHEADER);
+  for(var h = 0, height = BITMAPINFOHEADER.LONGbiHeight;
+      h< height;
+      h ++ 
+  ){
+    for(i = 0, len = BITMAPINFOHEADER.LONGbiWidth;
+        i < len; 
+        i++
+    ){
+
+      if( bit_count == 8 ){
+        pixals.push ( source.readUInt8( pixals_starts + i ) );
+      } else {
+        pixals.push({
+          'B' : source.readUInt8( pixals_starts + i*3 + 0 ),
+          'G' : source.readUInt8( pixals_starts + i*3 + 1 ),
+          'R' : source.readUInt8( pixals_starts + i*3 + 2 ),
+        });
+      }
+
     }
+    pixals_starts += line_bytes;
   }
   var bmp = {
     BITMAPFILEHEADER : BITMAPFILEHEADER,
@@ -179,7 +194,7 @@ function write_with_struct( buffer, structs, data, offset ){
       info = method;
       method = 'write';
     }
-
+    // console.log( name, method, info, offset );
     buffer[method](info,offset);
     offset += len;
   });
@@ -194,7 +209,7 @@ function bmp_builder ( info ) {
     'DWORDbiSize,         writeUInt32LE',
     'LONGbiWidth,         writeUInt32LE',
     'LONGbiHeight,        writeUInt32LE',
-    'WORDbiPlanes,        writeUInt32LE',
+    'WORDbiPlanes,        writeUInt16LE',
     'WORDbiBitCount,      writeUInt16LE',
     'DWORDbiCompression,  writeUInt32LE',
     'DWORDbiSizeImage,    writeUInt32LE',
@@ -230,8 +245,8 @@ function bmp_builder ( info ) {
     DWORDbiClrUsed      : 0,
     DWORDbiClrImportant : 0
   };
-  data.DWORDbiSizeImage = ((info.width * info.bit_count) + 31) /32 * 8 * info.height;
-  
+  data.DWORDbiSizeImage = 
+     ((Math.ceil((info.width * info.bit_count)/32)*32) / 8) * info.height;
   var RGBQUADbmiColors_len =  {
                                 1 : 2,
                                 4 : 16,
@@ -246,13 +261,11 @@ function bmp_builder ( info ) {
       BYTErgbRed      : 0,//红色的亮度（值范围为0-255)
       BYTErgbReserved : 0,//保留，必须为0
     });
-    data.DWORDbfOffBits += 32;
   }
-  data.DWORDbfSize = data.DWORDbfOffBits + data.DWORDbiSizeImage;
 
   var pixals  = [];
   var pixals_counts = info.width * info.height;
-  for(i = 1, len = pixals_counts || 0; i < len; i++){
+  for(i = 0, len = pixals_counts || 0; i < len; i++){
     if( info.bit_count == 24 ){
       pixals.push({
         R : 0,
@@ -263,8 +276,8 @@ function bmp_builder ( info ) {
       pixals.push (0);
     }
   }
+  var buffer;
   // ['name, function']
-  var buffer = new Buffer( data.DWORDbfSize );
   var ret = {
     palette : palette,
     pixals  : pixals,
@@ -278,23 +291,51 @@ function bmp_builder ( info ) {
       }
     },
     write_pixals : function() {
-      var offset = data.DWORDbfSize;
-      for(var i = 0, len = pixals.length; i< len; i++ ){
-        if( !pixals[i].R ){ // dont care about 1 / 4 / 16
-          buffer.writeUInt8( pixals[i], offset + i );
-        } else {
-          write_with_struct( buffer, color24_writes, pixals[i], offset + i * 3 )
+      var offset = data.DWORDbfOffBits;
+      // bmp each line of bytes must be %4 == 0
+      var line_bytes = Math.ceil((info.width*info.bit_count/8)/4)*4;
+      var pixal;
+      var i = 0, w, width;
+      for(var h = 0, height = info.height;
+          h< height;
+          h++
+      ){
+
+        for(w = 0, width = info.width;
+          w< width;
+          w ++,i++
+        ){
+          if( pixals[i].R == undefined ){ // dont care about 1 / 4 / 16
+            buffer.writeUInt8( pixals[i], offset + w );
+          } else {
+            write_with_struct( buffer, color24_writes, pixals[i], offset + w * 3 )
+          }
         }
+
+        offset += line_bytes;
       }
     },
     out : function() {
+      data.DWORDbiClrUsed      = palette.length;
+      data.DWORDbiClrImportant = palette.length;
+      data.DWORDbfOffBits      = 54 + palette.length * 4;
+      data.DWORDbfSize         = data.DWORDbfOffBits + data.DWORDbiSizeImage;
+
+      buffer = new Buffer( data.DWORDbfSize );
+      buffer.fill(0);
+
       this.write_header();
       this.write_palette();
       this.write_pixals();
       return buffer;
     }
   }
+  return ret;
 }
-// console.log( sff_parser(source) );
-// console.log( pcx_parser(fs.readFileSync('./00000001.pcx')) );
-console.log( bmp_parser(fs.readFileSync('./1.bmp')));
+
+module.exports = {
+  sff_parser : sff_parser,
+  pcx_parser : pcx_parser,
+  bmp_parser : bmp_parser,
+  bmp_builder: bmp_builder
+};
