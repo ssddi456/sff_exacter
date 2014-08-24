@@ -63,6 +63,45 @@ function sff_parser ( source ) {
   };
 }
 
+// int count=0;   
+// while((count=in.read()) >=0){   
+//  if(count==0xc1)   
+//   out.write(in.read());   
+//  else if(count<=0xc0){   
+//   out.write(count);   
+//  }   
+//  else if(count>0xc1){   
+//   int next=in.read();   
+//   for(int i=0;i<(count-0xc0);i++)   
+//    out.write(next);   
+//  }   
+// }   
+function rle_decode ( source, offset, bytes ) {
+  var ret = [];
+  var total = source.length;
+  var current;
+  var next;
+  var j;
+
+  for(var i = offset; i < total && bytes; i ++ ){
+    current = source.readUInt8( i );
+    if( current <= 0xc0 ){
+      ret.push(current);
+      bytes --;
+    } else{
+      next = source.readUInt8(++i);
+      if( current == 0xc1 ){
+        ret.push(next);
+      } else{
+        for(j = 0; j< current - 0xc0; j ++ ){
+          bytes --;
+          ret.push( next );
+        }
+      }
+    }
+  } 
+  return ret;
+}
 function pcx_parser ( source ) {
   var header ={
     Manufacturer  : source.readUInt8(0),//.Manufacturer   resb    1       ; should always be 0Ah
@@ -82,9 +121,13 @@ function pcx_parser ( source ) {
     PaletteType   : source.readUInt16LE(68),//.PaletteType    resw    1
     filler        : source.slice(70,70+58),//.VScrSize       resw    1       ; PC Paintbrush IV or higher
   };
-  var pointer = 128;
-  var body = {};
-  return header;
+
+  var pixals = rle_decode(source,128, header.vRes * header.hRes);
+
+  return {
+    header : header,
+    pixals : pixals
+  };
 }
 
 function bmp_parser ( source ) {
@@ -127,7 +170,7 @@ function bmp_parser ( source ) {
                               }[BITMAPINFOHEADER.WORDbiBitCount];
   var palette = [];
 
-  for(var i = 0, len = Math.min(RGBQUADbmiColors_len || 0, BITMAPINFOHEADER.DWORDbiClrUsed);
+  for(var i = 0, len = Math.min(RGBQUADbmiColors_len || 0, BITMAPINFOHEADER.DWORDbiClrUsed||256);
       i < len; 
       i++
   ){
@@ -316,8 +359,8 @@ function bmp_builder ( info ) {
       }
     },
     out : function() {
-      data.DWORDbiClrUsed      = palette.length;
-      data.DWORDbiClrImportant = palette.length;
+      data.DWORDbiClrUsed      = 
+      data.DWORDbiClrImportant = palette.length == 256 ? 0 : palette.length;
       data.DWORDbfOffBits      = 54 + palette.length * 4;
       data.DWORDbfSize         = data.DWORDbfOffBits + data.DWORDbiSizeImage;
 
@@ -332,10 +375,31 @@ function bmp_builder ( info ) {
   }
   return ret;
 }
-
+function act_parser ( source ) {
+  var total = source.length;
+  var palette = [];
+  for( var i = 0; i < total; ){
+    try{
+      palette.push({
+        BYTErgbRed      : source.readUInt8(i++),//红色的亮度（值范围为0-255)
+        BYTErgbGreen    : source.readUInt8(i++),//绿色的亮度（值范围为0-255)
+        BYTErgbBlue     : source.readUInt8(i++),//蓝色的亮度（值范围为0-255)
+        BYTErgbReserved : 0,//保留，必须为0
+      });
+    } catch(e){
+      break;
+    }
+  }
+  return palette;
+}
 module.exports = {
   sff_parser : sff_parser,
+
   pcx_parser : pcx_parser,
+  
   bmp_parser : bmp_parser,
-  bmp_builder: bmp_builder
+  
+  bmp_builder: bmp_builder,
+
+  act_parser : act_parser
 };
