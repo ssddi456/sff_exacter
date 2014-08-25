@@ -45,7 +45,7 @@ function sff_parser ( source ) {
       group      : source.readUInt16LE( pointer+12 ),// 12-13 Group number [02] 
       no         : source.readUInt16LE( pointer+14 ),// 14-15 Image number (in the group) [02]
       prevcopy   : source.readUInt16LE( pointer+16 ),// 16-17 Index of previous copy of sprite (linked sprites only) [02]
-                                                  // This is the actual
+                                                     // This is the actual
       samepalt   : source.readUInt8   ( pointer+18 ),//18 True if palette is same as previous image [01] 
       comment    : source.slice       ( pointer+19, pointer+32 )
                     .toString().replace(/\u0000/g,''),//19-31 Blank; can be used for comments [14]
@@ -88,7 +88,7 @@ function rle_decode ( source, offset, bytes ) {
     if( current <= 0xc0 ){
       ret.push(current);
       bytes --;
-    } else{
+    } else if( i < total - 1 ){
       next = source.readUInt8(++i);
       if( current == 0xc1 ){
         ret.push(next);
@@ -392,6 +392,53 @@ function act_parser ( source ) {
   }
   return palette;
 }
+
+function air_parser( source ) {
+  var air = {};
+  var reg = /^((\[[^\]]*\])|((\d+,\s*){5}.*?)|(Clsn.+?)|(\s{2}Clsn.+?))$/;
+  var current_action;
+  source.split(/[\r\n]+/).forEach(function( line, idx ) {
+    if( line[0] == ';' ){
+      //comment skip;
+      return;
+    }
+    line.replace(reg, 
+      function($full, 
+               $full_, 
+               $tag, 
+               $frame,
+               $frame_count,
+               $frame_ext,
+               $collider_tag,
+               $collider_info
+    ){
+      if( $tag ){
+        var act_id = $tag.match(/\d+/);
+        if( air[act_id] ){
+          console.log( 'duplicate id', act_id, air[act_id] );
+        }
+        current_action = air[act_id] = [];
+      } else if( $frame ){
+        $frame = $frame.split(/,\s*/);
+        current_action.push({
+          group   : $frame[0],
+          no      : $frame[1],
+          axisX   : $frame[2],
+          axisY   : $frame[3],
+          counts  : $frame[4],
+          flip    : $frame[5],
+          composit: $frame[6]
+        });
+      } else if( $collider_tag  ){
+        // console.log( '$collider_tag', $collider_tag);
+      } else if( $collider_info ){
+        // console.log( '$collider_info', $collider_info);
+      }
+    });
+  });
+  return air;
+}
+
 module.exports = {
   sff_parser : sff_parser,
 
@@ -401,5 +448,7 @@ module.exports = {
   
   bmp_builder: bmp_builder,
 
-  act_parser : act_parser
+  act_parser : act_parser,
+
+  air_parser : air_parser
 };
